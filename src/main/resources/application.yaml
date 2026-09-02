@@ -40,4 +40,4 @@ server:
 
 logging:
   level:
-    com.fiap.autorizador: INFO
+    com.vr.autorizador: INFO

@@ -19,19 +19,25 @@ Contrato dos serviços em [`.claude/autorizador.md`](.claude/autorizador.md).
 ## Arquitetura MVC
 
 ```
-src/main/java/com/fiap/autorizador/
+src/main/java/com/vr/autorizador/
 ├── controller/            # Camada de entrada HTTP
-│   ├── CartaoController       POST /cartoes, GET /cartoes/{numeroCartao}
-│   ├── TransacaoController    POST /transacoes
-│   └── dto/                   CartaoRequestDTO, TransacaoRequestDTO, MotivoRecusa
+│   ├── CardController         POST /cartoes, GET /cartoes/{numeroCartao}
+│   ├── TransactionController  POST /transacoes
+│   └── dto/                   CardRequestDTO, TransactionRequestDTO, DeclineReason
 ├── service/               # Regras de negócio
-│   ├── CartaoService          Criação do cartão (saldo inicial) e consulta de saldo
-│   └── AutorizacaoService     Regras de autorização, débito e idempotência
+│   ├── CardService            Criação do cartão (saldo inicial) e consulta de saldo
+│   └── AuthorizationService   Regras de autorização, débito e idempotência
 ├── repository/            # Acesso a dados (Spring Data JPA)
-├── model/                 # Entidades: Cartao, Transacao
+├── model/                 # Entidades: Card, CardTransaction
 ├── exception/             # Exceções de negócio + @RestControllerAdvice
 └── config/                # OpenAPI
 ```
+
+O código, as entidades e as colunas do banco (`card`, `card_transaction`) estão em inglês.
+O contrato HTTP permanece em português, como exige o enunciado: os endpoints `/cartoes` e
+`/transacoes`, os campos JSON (`numeroCartao`, `senha`, `senhaCartao`, `valor`) — mapeados
+nos DTOs via `@JsonProperty` — e os corpos de recusa (`SALDO_INSUFICIENTE`, `SENHA_INVALIDA`,
+`CARTAO_INEXISTENTE`), expostos por `DeclineReason#getCode()`.
 
 ## Como subir
 
