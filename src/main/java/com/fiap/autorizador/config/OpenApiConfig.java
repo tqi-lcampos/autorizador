@@ -1,4 +1,4 @@
-package com.fiap.cfontes0estapar.config;
+package com.fiap.autorizador.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
@@ -9,10 +9,10 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfig {
 
     @Bean
-    public OpenAPI estaparOpenAPI() {
+    public OpenAPI autorizadorOpenAPI() {
         return new OpenAPI().info(new Info()
-                .title("FIAP - Gestao de Estacionamento API")
-                .description("Recebe eventos do simulador da garagem, aplica preco dinamico e apura faturamento.")
+                .title("FIAP - Mini Autorizador API")
+                .description("Criacao de cartoes de beneficio, consulta de saldo e autorizacao de transacoes.")
                 .version("v1"));
     }
 }

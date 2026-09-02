@@ -1,13 +1,13 @@
-package com.fiap.cfontes0estapar;
+package com.fiap.autorizador;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class Cfontes0estaparApplication {
+public class AutorizadorApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(Cfontes0estaparApplication.class, args);
+		SpringApplication.run(AutorizadorApplication.class, args);
 	}
 
 }

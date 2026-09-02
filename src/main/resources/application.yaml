@@ -1,8 +1,8 @@
 spring:
   application:
-    name: cfontes0estapar
+    name: autorizador
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3308/estapardb?useSSL=false&allowPublicKeyRetrieval=true}
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3308/autorizadordb?useSSL=false&allowPublicKeyRetrieval=true}
     username: ${SPRING_DATASOURCE_USERNAME:appuser}
     password: ${SPRING_DATASOURCE_PASSWORD:apppassword}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -20,15 +20,6 @@ spring:
         format_sql: true
   jackson:
     default-property-inclusion: non_null
-
-# Integracao com o simulador da garagem
-simulator:
-  base-url: ${SIMULATOR_BASE_URL:http://localhost:3000}
-  garage-path: /garage
-  # Ao iniciar, busca e armazena a configuracao da garagem/vagas
-  load-on-startup: true
-  connect-timeout: 5s
-  read-timeout: 10s
 
 springdoc:
   default-produces-media-type: application/json
@@ -49,4 +40,4 @@ server:
 
 logging:
   level:
-    com.fiap.cfontes0estapar: INFO
+    com.fiap.autorizador: INFO

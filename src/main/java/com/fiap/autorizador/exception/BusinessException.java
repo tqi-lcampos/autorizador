@@ -1,8 +1,5 @@
-package com.fiap.cfontes0estapar.exception;
+package com.fiap.autorizador.exception;
 
-/**
- * Base das violacoes de regra de negocio do estacionamento.
- */
 public abstract class BusinessException extends RuntimeException {
 
     protected BusinessException(String message) {

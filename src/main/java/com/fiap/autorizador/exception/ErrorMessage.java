@@ -1,13 +1,10 @@
-package com.fiap.cfontes0estapar.exception;
+package com.fiap.autorizador.exception;
 
 import org.springframework.http.HttpStatus;
 
 import java.time.OffsetDateTime;
 import java.util.Set;
 
-/**
- * Corpo padrao de erro da API.
- */
 public record ErrorMessage(
         int status,
         String error,

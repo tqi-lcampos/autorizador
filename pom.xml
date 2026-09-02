@@ -9,10 +9,10 @@
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>com.fiap</groupId>
-	<artifactId>cfontes0estapar</artifactId>
+	<artifactId>autorizador</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>cfontes0estapar</name>
-	<description>Gestao de estacionamento: eventos do simulador, preco dinamico e faturamento</description>
+	<name>autorizador</name>
+	<description>Mini autorizador: cartoes de beneficio, saldo e autorizacao de transacoes</description>
 
 	<properties>
 		<java.version>21</java.version>
@@ -102,7 +102,7 @@
 				</executions>
 				<configuration>
 					<excludes>
-						<exclude>**/Cfontes0estaparApplication.class</exclude>
+						<exclude>**/AutorizadorApplication.class</exclude>
 						<exclude>**/config/**</exclude>
 						<exclude>**/controller/dto/**</exclude>
 						<exclude>**/model/**</exclude>

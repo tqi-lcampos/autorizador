@@ -1,8 +1,8 @@
-# cfontes0estapar — Gestão de Estacionamento
+# autorizador — Mini Autorizador
 
-API REST que consome os eventos do simulador de garagem, aplica preço dinâmico por lotação e apura o faturamento por setor e data.
+API REST que processa transações de Vale Refeição / Vale Alimentação vindas das maquininhas de cartão: cria cartões, informa o saldo e autoriza (ou recusa) as transações.
 
-Regras de negócio e contrato das APIs em [`.claude/.rule/rule.md`](.claude/.rule/rule.md).
+Contrato dos serviços em [`.claude/autorizador.md`](.claude/autorizador.md).
 
 ## Stack
 
@@ -19,28 +19,23 @@ Regras de negócio e contrato das APIs em [`.claude/.rule/rule.md`](.claude/.rul
 ## Arquitetura MVC
 
 ```
-src/main/java/com/fiap/cfontes0estapar/
-├── controller/            # Camada de entrada HTTP (View da API)
-│   ├── WebhookController      POST /webhook
-│   ├── RevenueController      GET  /revenue
-│   ├── GarageController       GET  /garage, POST /garage/reload
-│   └── dto/                   Contratos de entrada e saída
+src/main/java/com/fiap/autorizador/
+├── controller/            # Camada de entrada HTTP
+│   ├── CartaoController       POST /cartoes, GET /cartoes/{numeroCartao}
+│   ├── TransacaoController    POST /transacoes
+│   └── dto/                   CartaoRequestDTO, TransacaoRequestDTO, MotivoRecusa
 ├── service/               # Regras de negócio
-│   ├── ParkingEventService     ENTRY / PARKED / EXIT
-│   ├── PricingService          Preço dinâmico e cálculo do valor
-│   ├── GarageService           Configuração e lotação da garagem
-│   ├── RevenueService          Apuração do faturamento
-│   ├── SimulatorClient         Consome GET /garage do simulador
-│   └── GarageBootstrapRunner   Carga inicial na subida da aplicação
+│   ├── CartaoService          Criação do cartão (saldo inicial) e consulta de saldo
+│   └── AutorizacaoService     Regras de autorização, débito e idempotência
 ├── repository/            # Acesso a dados (Spring Data JPA)
-├── model/                 # Entidades: Sector, Spot, ParkingSession
+├── model/                 # Entidades: Cartao, Transacao
 ├── exception/             # Exceções de negócio + @RestControllerAdvice
-└── config/                # RestClient, OpenAPI, properties do simulador
+└── config/                # OpenAPI
 ```
 
 ## Como subir
 
-### Com Docker (aplicação + MySQL + simulador)
+### Com Docker (aplicação + MySQL)
 
 ```bash
 docker compose up --build
@@ -48,133 +43,89 @@ docker compose up --build
 
 - Aplicação: <http://localhost:3003>
 - Swagger: <http://localhost:3003/swagger-ui>
-- MySQL: `localhost:3308` (`estapardb` / `appuser` / `apppassword`)
-- Simulador: <http://localhost:3000>
+- MySQL: `localhost:3308` (`autorizadordb` / `appuser` / `apppassword`)
 
 ### Local (apenas o banco em container)
 
 ```bash
-docker compose up -d mysql_estapar_app
+docker compose up -d mysql_autorizador
 ./mvnw spring-boot:run
 ```
-
-O simulador é configurável por `SIMULATOR_BASE_URL` (padrão `http://localhost:3000`).
 
 ### Testes
 
 ```bash
-./mvnw test                          # 81 testes
-# relatório de cobertura: target/site/jacoco/index.html
+./mvnw test                        
 ```
 
 ## Endpoints
 
-### `POST /webhook` — eventos do simulador
+### `POST /cartoes` — cria um cartão
 
-Um único payload atende aos três tipos de evento.
-
-**ENTRY**
-```json
-{ "license_plate": "ZUL0001", "entry_time": "2025-01-01T12:00:00.000Z", "event_type": "ENTRY" }
-```
-
-**PARKED**
-```json
-{ "license_plate": "ZUL0001", "lat": -23.561684, "lng": -46.655981, "event_type": "PARKED" }
-```
-
-**EXIT**
-```json
-{ "license_plate": "ZUL0001", "exit_time": "2025-01-01T12:00:00.000Z", "event_type": "EXIT" }
-```
-
-Respostas:
-
-| Status | Quando |
-|---|---|
-| `200` | Evento aceito e processado |
-| `400` | Campos obrigatórios ausentes para o tipo de evento |
-| `404` | Veículo sem permanência aberta, ou coordenada sem vaga cadastrada |
-| `409` | Garagem lotada, entrada duplicada, vaga já ocupada ou setor fechado |
-
-### `GET /revenue` — faturamento por setor e data
-
-O contrato define corpo JSON no GET; os mesmos campos também são aceitos como query params (mais prático no navegador e no Swagger).
+Todo cartão é criado com saldo inicial de **R$ 500,00**.
 
 ```bash
-# corpo JSON (contrato)
-curl -X GET http://localhost:3003/revenue \
+curl -X POST http://localhost:3003/cartoes \
   -H 'Content-Type: application/json' \
-  -d '{ "date": "2025-01-01", "sector": "A" }'
-
-# query params (equivalente)
-curl 'http://localhost:3003/revenue?date=2025-01-01&sector=A'
+  -d '{ "numeroCartao": "6549873025634501", "senha": "1234" }'
 ```
 
-```json
-{ "amount": 18.00, "currency": "BRL", "timestamp": "2025-01-01T12:00:00.000Z" }
+| Status | Corpo | Quando |
+|---|---|---|
+| `201` | eco do corpo enviado | Cartão criado |
+| `422` | eco do corpo enviado | Cartão já existe |
+| `400` | JSON de erro | Corpo inválido (número fora do padrão de 16 dígitos, senha vazia) |
+
+### `GET /cartoes/{numeroCartao}` — saldo do cartão
+
+```bash
+curl http://localhost:3003/cartoes/6549873025634501
 ```
 
-### `GET /garage` — configuração armazenada
+| Status | Corpo | Quando |
+|---|---|---|
+| `200` | saldo (`495.15`) | Cartão encontrado |
+| `404` | *sem corpo* | Cartão inexistente |
 
-Devolve setores e vagas no mesmo formato do simulador. `POST /garage/reload` reimporta a configuração — útil quando o simulador ainda não estava disponível na subida da aplicação.
+### `POST /transacoes` — autoriza uma transação
+
+```bash
+curl -X POST http://localhost:3003/transacoes \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 8b1f...'   # opcional \
+  -d '{ "numeroCartao": "6549873025634501", "senhaCartao": "1234", "valor": 10.00 }'
+```
+
+| Status | Corpo | Quando |
+|---|---|---|
+| `201` | `OK` | Transação autorizada e valor debitado |
+| `422` | `CARTAO_INEXISTENTE` | O cartão não existe |
+| `422` | `SENHA_INVALIDA` | Senha diferente da senha do cartão |
+| `422` | `SALDO_INSUFICIENTE` | Valor maior que o saldo disponível |
+| `400` | JSON de erro | Corpo inválido (valor ausente ou ≤ 0) |
 
 ## Regras implementadas
 
-### Ciclo de vida da permanência
+Uma transação é autorizada quando o cartão existe, a senha está correta e há saldo disponível — verificados nessa ordem. Autorizada, o valor é debitado do saldo e a transação é registrada.
 
-`ENTRY` → `PARKED` → `EXIT`, modelado em `ParkingSession` com os status `ENTERED`, `PARKED` e `EXITED`.
+### Idempotência e concorrência
 
-- **ENTRY**: recusa entrada duplicada da mesma placa e recusa a entrada com a garagem lotada. Congela o multiplicador de preço dinâmico.
-- **PARKED**: resolve a vaga por `lat`/`lng`, marca a vaga como ocupada e vincula o setor à permanência.
-- **EXIT**: libera a vaga, calcula o valor e encerra a permanência.
-
-### Preço dinâmico (fixado no momento da entrada)
-
-| Lotação da garagem | Multiplicador |
-|---|---|
-| < 25% | 0,90 (desconto de 10%) |
-| 25% a 49,99% | 1,00 (preço cheio) |
-| 50% a 74,99% | 1,10 (acréscimo de 10%) |
-| 75% a 100% | 1,25 (acréscimo de 25%) |
-
-### Cálculo do valor
-
-- Primeiros **30 minutos gratuitos**.
-- Acima de 30 minutos: tarifa fixa por hora — **inclusive a primeira** — com as horas **arredondadas para cima**.
-- `valor = basePrice × multiplicador × horas`, com 2 casas decimais (`HALF_UP`).
-
-Exemplo: entrada com garagem vazia (multiplicador 0,90), `basePrice` 10,00 e 2 h de permanência → `10,00 × 0,90 × 2 = 18,00`.
-
-### Lotação
-
-- **Setor a 100%**: fechado (`sector.closed`), só reabre com a saída de um veículo estacionado.
-- **Garagem a 100%**: nenhuma nova entrada é aceita até a liberação de uma vaga.
+- O cartão é lido com **`SELECT ... FOR UPDATE`** (`@Lock(PESSIMISTIC_WRITE)`) dentro da transação, então duas instâncias da aplicação não debitam o mesmo saldo simultaneamente. A entidade `Cartao` também tem `@Version`, como proteção adicional.
+- Cada transação grava uma **chave de idempotência única** (`transacao.chave_idempotencia`). A chave vem do header opcional `Idempotency-Key`; sem o header, é gerado um UUID por requisição. O reenvio com a mesma chave responde `201 OK` **sem debitar novamente** — inclusive em reenvios simultâneos, barrados pela unique key.
 
 ## Premissas assumidas
 
-O `rule.md` deixa alguns pontos abertos; as decisões tomadas estão registradas aqui.
+1. **Resposta síncrona.** O contrato exige que o motivo da recusa volte na mesma chamada (`201 OK` / `422 <motivo>`), então a decisão de autorização é síncrona. `AutorizacaoService.publicarEvento` é o ponto de extensão para publicar a transação autorizada em Kafka (auditoria/integração) **após** o commit, fora do caminho da decisão — a chave da mensagem deve ser o número do cartão, para preservar a ordem por cartão.
 
-1. **Faixas do preço dinâmico.** O texto original repete "lotação menor" nas quatro faixas. Foram interpretadas como faixas contíguas e mutuamente exclusivas (`<25%`, `25–50%`, `50–75%`, `75–100%`), na ordem apresentada.
+2. **Senha armazenada como texto.** O contrato ecoa a senha na resposta de `POST /cartoes`; não há requisito de hash. Em produção, a senha deveria ser armazenada com hash e nunca devolvida.
 
-2. **Lotação usada na entrada é a da garagem, não a do setor.** No evento `ENTRY` o setor ainda é desconhecido — ele só é determinado no `PARKED`, pelas coordenadas. Como a regra exige o cálculo "na hora da entrada", a lotação considerada é a da garagem inteira. A tarifa base (`basePrice`) vem do setor resolvido no `PARKED` e é aplicada na saída.
+3. **Valor da transação deve ser positivo.** O contrato não define o comportamento para valor zero ou negativo; a validação recusa com `400`.
 
-3. **Lotação conta veículos dentro da garagem, não vagas ocupadas.** Um veículo que já enviou `ENTRY` mas ainda não enviou `PARKED` está dentro da garagem e ocupa capacidade. Por isso a taxa de lotação usa permanências abertas ÷ capacidade total. O fechamento de um setor, por sua vez, usa as vagas ocupadas daquele setor.
-
-4. **`EXIT` sem `PARKED` prévio é cobrado como zero.** Sem o `PARKED` não há setor e, portanto, não há tarifa base para aplicar. A permanência é encerrada normalmente (liberando capacidade) e um `WARN` é registrado.
-
-5. **Webhook responde 409 quando a regra recusa o evento.** O contrato prevê `200`, que é o retorno de todo evento aceito. Recusas por lotação, entrada duplicada ou vaga ocupada retornam `409` com corpo de erro, o que torna a regra observável e testável.
-
-6. **Horários são normalizados para UTC.** Os eventos chegam com offset (`...Z`) e são convertidos para UTC antes da persistência. A data de `GET /revenue` é interpretada em UTC.
-
-7. **Faturamento é contabilizado na data de saída**, momento em que a cobrança é efetivada.
-
-8. **Sem capacidade cadastrada, a garagem é considerada lotada.** Se o simulador estiver indisponível na subida, nenhuma entrada é aceita até que a configuração seja importada — evita processar eventos sem setores e vagas conhecidos.
+4. **Cartão inexistente tem dois status.** `404` sem corpo na consulta de saldo e `422 CARTAO_INEXISTENTE` na transação, exatamente como o contrato descreve — por isso existem duas exceções (`CartaoNaoEncontradoException` e `CartaoInexistenteException`).
 
 ## Modelo de dados
 
 | Tabela | Descrição |
 |---|---|
-| `sector` | Setor com `base_price`, `max_capacity` e flag `closed` |
-| `spot` | Vaga com `id` vindo do simulador, coordenadas e flag `occupied` |
-| `parking_session` | Permanência: placa, setor, vaga, horários, multiplicador, valor e status |
+| `cartao` | Número (único), senha, saldo e versão para lock otimista |
+| `transacao` | Transações autorizadas: cartão, valor, chave de idempotência (única) e data |
