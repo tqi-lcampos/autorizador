@@ -23,7 +23,7 @@ src/main/java/com/vr/autorizador/
 ├── controller/            # Camada de entrada HTTP
 │   ├── CardController         POST /cartoes, GET /cartoes/{numeroCartao}
 │   ├── TransactionController  POST /transacoes
-│   └── dto/                   CardRequestDTO, TransactionRequestDTO, DeclineReason
+│   └── dto/                   CardRequestDTO, CardResponseDTO, TransactionRequestDTO, DeclineReason
 ├── service/               # Regras de negócio
 │   ├── CardService            Criação do cartão (saldo inicial) e consulta de saldo
 │   └── AuthorizationService   Regras de autorização, débito e idempotência
@@ -38,6 +38,11 @@ O contrato HTTP permanece em português, como exige o enunciado: os endpoints `/
 `/transacoes`, os campos JSON (`numeroCartao`, `senha`, `senhaCartao`, `valor`) — mapeados
 nos DTOs via `@JsonProperty` — e os corpos de recusa (`SALDO_INSUFICIENTE`, `SENHA_INVALIDA`,
 `CARTAO_INEXISTENTE`), expostos por `DeclineReason#getCode()`.
+
+**Divergência consciente do enunciado:** as respostas 201 e 422 de `POST /cartoes` devolvem
+apenas `{"numeroCartao": "..."}`, via `CardResponseDTO`. O enunciado especifica o eco do corpo
+recebido (com `senha`), mas devolver a senha em uma resposta HTTP a expõe em logs, proxies e
+histórico do cliente sem nenhum ganho para o chamador, que acabou de enviá-la.
 
 ## Como subir
 
@@ -78,8 +83,8 @@ curl -X POST http://localhost:3003/cartoes \
 
 | Status | Corpo | Quando |
 |---|---|---|
-| `201` | eco do corpo enviado | Cartão criado |
-| `422` | eco do corpo enviado | Cartão já existe |
+| `201` | `{ "numeroCartao": "6549873025634501" }` | Cartão criado |
+| `422` | `{ "numeroCartao": "6549873025634501" }` | Cartão já existe |
 | `400` | JSON de erro | Corpo inválido (número fora do padrão de 16 dígitos, senha vazia) |
 
 ### `GET /cartoes/{numeroCartao}` — saldo do cartão
@@ -116,22 +121,28 @@ Uma transação é autorizada quando o cartão existe, a senha está correta e h
 
 ### Idempotência e concorrência
 
-- O cartão é lido com **`SELECT ... FOR UPDATE`** (`@Lock(PESSIMISTIC_WRITE)`) dentro da transação, então duas instâncias da aplicação não debitam o mesmo saldo simultaneamente. A entidade `Cartao` também tem `@Version`, como proteção adicional.
-- Cada transação grava uma **chave de idempotência única** (`transacao.chave_idempotencia`). A chave vem do header opcional `Idempotency-Key`; sem o header, é gerado um UUID por requisição. O reenvio com a mesma chave responde `201 OK` **sem debitar novamente** — inclusive em reenvios simultâneos, barrados pela unique key.
+São duas garantias distintas, e só a primeira é obrigatória pelo contrato:
+
+- **Concorrência entre instâncias** (obrigatória): o cartão é lido com **`SELECT ... FOR UPDATE`** (`@Lock(PESSIMISTIC_WRITE)`) dentro da transação, então duas instâncias da aplicação não debitam o mesmo saldo simultaneamente. Como o lock é do banco, vale para N instâncias. A entidade `Card` também tem `@Version`, que protege caminhos futuros que alterem o cartão sem pegar esse lock.
+- **Deduplicação de reenvios** (opcional): a chave vem do header `Idempotency-Key` e é gravada em `card_transaction.idempotency_key`, com unique constraint. O reenvio com a mesma chave responde `201 OK` **sem debitar novamente** — inclusive em reenvios simultâneos, barrados pela unique key.
+
+A chave é gerada **pelo cliente**, uma por intenção de venda, e reenviada em toda tentativa até haver resposta definitiva. Sem o header, `idempotencyKey` é `null`: a transação é debitada, a coluna fica nula (a unique constraint ignora nulos) e um `WARN` registra que aquele débito não tem proteção contra reenvio. A aplicação **não** gera a chave — uma chave gerada no servidor seria diferente em cada tentativa e daria uma falsa sensação de idempotência.
+
+Limitação conhecida: o reenvio não valida se o corpo é o mesmo da chamada original. Um cliente que reutilize uma chave para outro valor recebe `201 OK` sem débito. A correção é comparar `card_number`/`amount` gravados com os da requisição e recusar quando divergirem.
 
 ## Premissas assumidas
 
-1. **Resposta síncrona.** O contrato exige que o motivo da recusa volte na mesma chamada (`201 OK` / `422 <motivo>`), então a decisão de autorização é síncrona. `AutorizacaoService.publicarEvento` é o ponto de extensão para publicar a transação autorizada em Kafka (auditoria/integração) **após** o commit, fora do caminho da decisão — a chave da mensagem deve ser o número do cartão, para preservar a ordem por cartão.
+1. **Resposta síncrona.** O contrato exige que o motivo da recusa volte na mesma chamada (`201 OK` / `422 <motivo>`), então a decisão de autorização é síncrona. `AuthorizationService.publishEvent` é o ponto de extensão para publicar a transação autorizada em Kafka (auditoria/integração) **após** o commit, fora do caminho da decisão — a chave da mensagem deve ser o número do cartão, para preservar a ordem por cartão.
 
-2. **Senha armazenada como texto.** O contrato ecoa a senha na resposta de `POST /cartoes`; não há requisito de hash. Em produção, a senha deveria ser armazenada com hash e nunca devolvida.
+2. **Senha armazenada como texto.** Não há requisito de hash no contrato. Em produção, a senha deveria ser armazenada com hash. A resposta de `POST /cartoes` já não devolve a senha (ver a divergência na seção de arquitetura).
 
 3. **Valor da transação deve ser positivo.** O contrato não define o comportamento para valor zero ou negativo; a validação recusa com `400`.
 
-4. **Cartão inexistente tem dois status.** `404` sem corpo na consulta de saldo e `422 CARTAO_INEXISTENTE` na transação, exatamente como o contrato descreve — por isso existem duas exceções (`CartaoNaoEncontradoException` e `CartaoInexistenteException`).
+4. **Cartão inexistente tem dois status.** `404` sem corpo na consulta de saldo e `422 CARTAO_INEXISTENTE` na transação, exatamente como o contrato descreve — por isso existem duas exceções (`CardNotFoundException` e `NonexistentCardException`).
 
 ## Modelo de dados
 
 | Tabela | Descrição |
 |---|---|
-| `cartao` | Número (único), senha, saldo e versão para lock otimista |
-| `transacao` | Transações autorizadas: cartão, valor, chave de idempotência (única) e data |
+| `card` | Número (único), senha, saldo e versão para lock otimista |
+| `card_transaction` | Transações autorizadas: cartão, valor, chave de idempotência (única, opcional) e data |
