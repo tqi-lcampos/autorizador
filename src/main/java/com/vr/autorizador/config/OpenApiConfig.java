@@ -11,7 +11,7 @@ public class OpenApiConfig {
     @Bean
     public OpenAPI autorizadorOpenAPI() {
         return new OpenAPI().info(new Info()
-                .title("FIAP - Mini Autorizador API")
+                .title("VR - Mini Autorizador API")
                 .description("Criacao de cartoes de beneficio, consulta de saldo e autorizacao de transacoes.")
                 .version("v1"));
     }
