@@ -14,6 +14,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
+
 @Service
 @Slf4j
 @RequiredArgsConstructor
@@ -29,23 +31,21 @@ public class AuthorizationService {
      */
     @Transactional
     public void authorize(TransactionRequestDTO request, String idempotencyKey) {
-        if (idempotencyKey == null) {
-            log.warn("Transaction for card {} received without an idempotency key: a resend will be debited again",
-                    request.cardNumber());
-        } else if (cardTransactionRepository.existsByIdempotencyKey(idempotencyKey)) {
-            log.info("Transaction {} already processed, nothing to debit", idempotencyKey);
-            return;
-        }
 
+        Optional.ofNullable(idempotencyKey)
+                .filter(cardTransactionRepository::existsByIdempotencyKey)
+                .ifPresentOrElse(
+                        key -> log.info("Transaction {} already processed, nothing to debit", key),
+                        () -> debit(request, idempotencyKey));
+
+
+    }
+
+    private void debit(TransactionRequestDTO request, String idempotencyKey) {
         Card card = cardRepository.findByCardNumberForUpdate(request.cardNumber())
                 .orElseThrow(NonexistentCardException::new);
 
-        if (!card.passwordMatches(request.cardPassword())) {
-            throw new InvalidPasswordException();
-        }
-        if (!card.hasBalance(request.amount())) {
-            throw new InsufficientBalanceException();
-        }
+        validateCard(request, card);
 
         card.debit(request.amount());
         cardRepository.save(card);
@@ -59,11 +59,20 @@ public class AuthorizationService {
         try {
             cardTransactionRepository.saveAndFlush(transaction);
         } catch (DataIntegrityViolationException exception) {
-            // Reenvio simultaneo da mesma transacao: a unique key impede o debito duplicado.
             throw new TransactionAlreadyProcessedException(idempotencyKey, exception);
         }
 
         publishEvent(transaction);
+    }
+
+    private static void validateCard(TransactionRequestDTO request, Card card) {
+        Optional.of(card)
+                .filter(c -> c.passwordMatches(request.cardPassword()))
+                .orElseThrow(InvalidPasswordException::new);
+
+        Optional.of(card)
+                .filter(c -> c.hasBalance(request.amount()))
+                .orElseThrow(InsufficientBalanceException::new);
     }
 
     private void publishEvent(CardTransaction transaction) {

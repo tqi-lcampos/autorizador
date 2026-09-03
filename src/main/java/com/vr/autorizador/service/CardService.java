@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Optional;
+import java.util.function.Predicate;
 
 @Service
 @RequiredArgsConstructor
@@ -21,9 +23,9 @@ public class CardService {
 
     @Transactional
     public CardResponseDTO create(CardRequestDTO request) {
-        if (cardRepository.existsByCardNumber(request.cardNumber())) {
-            throw new CardAlreadyExistsException(request.cardNumber());
-        }
+        Optional.of(request.cardNumber())
+                .filter(Predicate.not(cardRepository::existsByCardNumber))
+                .orElseThrow(() -> new CardAlreadyExistsException(request.cardNumber()));
 
         Card card = Card.builder()
                 .cardNumber(request.cardNumber())
@@ -34,7 +36,6 @@ public class CardService {
         try {
             cardRepository.saveAndFlush(card);
         } catch (DataIntegrityViolationException exception) {
-            // Duas instancias criando o mesmo cartao ao mesmo tempo: a unique key decide.
             throw new CardAlreadyExistsException(request.cardNumber());
         }
 

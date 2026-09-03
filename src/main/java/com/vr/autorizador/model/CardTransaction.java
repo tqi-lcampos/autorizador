@@ -5,6 +5,7 @@ import lombok.*;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 
 @Entity
 @Table(name = "card_transaction")
@@ -25,10 +26,6 @@ public class CardTransaction {
     @Column(name = "amount", nullable = false, precision = 15, scale = 2)
     private BigDecimal amount;
 
-    /**
-     * Nula quando o cliente nao envia o header {@code Idempotency-Key}. A unique constraint
-     * ignora nulos, entao transacoes sem chave nunca colidem entre si.
-     */
     @Column(name = "idempotency_key", unique = true, length = 100)
     private String idempotencyKey;
 
@@ -37,8 +34,6 @@ public class CardTransaction {
 
     @PrePersist
     void onPersist() {
-        if (createdAt == null) {
-            createdAt = OffsetDateTime.now();
-        }
+        createdAt = Optional.ofNullable(createdAt).orElseGet(OffsetDateTime::now);
     }
 }

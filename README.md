@@ -35,9 +35,22 @@ src/main/java/com/vr/autorizador/
 
 O código, as entidades e as colunas do banco (`card`, `card_transaction`) estão em inglês.
 O contrato HTTP permanece em português, como exige o enunciado: os endpoints `/cartoes` e
-`/transacoes`, os campos JSON (`numeroCartao`, `senha`, `senhaCartao`, `valor`) — mapeados
-nos DTOs via `@JsonProperty` — e os corpos de recusa (`SALDO_INSUFICIENTE`, `SENHA_INVALIDA`,
-`CARTAO_INEXISTENTE`), expostos por `DeclineReason#getCode()`.
+`/transacoes`, os campos JSON e os corpos de recusa. A tradução acontece nas fronteiras, e
+**alterar qualquer nome da coluna da esquerda quebra o contrato**:
+
+| JSON / corpo da resposta | Java | Onde é mapeado |
+|---|---|---|
+| `numeroCartao` | `cardNumber` | `@JsonProperty` em `CardRequestDTO`, `CardResponseDTO` e `TransactionRequestDTO` |
+| `senha` | `password` | `@JsonProperty` em `CardRequestDTO` (só entrada) |
+| `senhaCartao` | `cardPassword` | `@JsonProperty` em `TransactionRequestDTO` |
+| `valor` | `amount` | `@JsonProperty` em `TransactionRequestDTO` |
+| `{numeroCartao}` na URL | `cardNumber` | `@PathVariable("numeroCartao")` em `CardController` |
+| `SALDO_INSUFICIENTE` | `INSUFFICIENT_BALANCE` | `DeclineReason#getCode()` |
+| `SENHA_INVALIDA` | `INVALID_PASSWORD` | `DeclineReason#getCode()` |
+| `CARTAO_INEXISTENTE` | `NONEXISTENT_CARD` | `DeclineReason#getCode()` |
+
+O enum guarda o texto do contrato em `code` justamente para que renomear a constante Java
+não altere o corpo da resposta.
 
 **Divergência consciente do enunciado:** as respostas 201 e 422 de `POST /cartoes` devolvem
 apenas `{"numeroCartao": "..."}`, via `CardResponseDTO`. O enunciado especifica o eco do corpo
@@ -124,7 +137,16 @@ Uma transação é autorizada quando o cartão existe, a senha está correta e h
 São duas garantias distintas, e só a primeira é obrigatória pelo contrato:
 
 - **Concorrência entre instâncias** (obrigatória): o cartão é lido com **`SELECT ... FOR UPDATE`** (`@Lock(PESSIMISTIC_WRITE)`) dentro da transação, então duas instâncias da aplicação não debitam o mesmo saldo simultaneamente. Como o lock é do banco, vale para N instâncias. A entidade `Card` também tem `@Version`, que protege caminhos futuros que alterem o cartão sem pegar esse lock.
-- **Deduplicação de reenvios** (opcional): a chave vem do header `Idempotency-Key` e é gravada em `card_transaction.idempotency_key`, com unique constraint. O reenvio com a mesma chave responde `201 OK` **sem debitar novamente** — inclusive em reenvios simultâneos, barrados pela unique key.
+- **Deduplicação de reenvios** (opcional): a chave vem do header `Idempotency-Key` e é gravada em `card_transaction.idempotency_key`, com unique constraint. O reenvio com a mesma chave responde `201 OK` **sem debitar novamente**.
+
+Em ambos os serviços a **unique constraint é o árbitro final** das corridas que o `SELECT` prévio não consegue enxergar — duas requisições simultâneas fazem o `exists...` antes de qualquer commit, então as duas o veem como falso e seguem para o `INSERT`. Quem perde a corrida recebe `DataIntegrityViolationException`, e cada serviço a traduz para o resultado correto:
+
+| Corrida | Constraint | Tratamento |
+|---|---|---|
+| Duas instâncias criando o mesmo cartão | `uk_card_card_number` | `CardService` converte em `CardAlreadyExistsException` → `422` com o número do cartão, igual ao caminho sem corrida |
+| Reenvio simultâneo da mesma transação | `uk_card_transaction_idempotency_key` | `AuthorizationService` lança `TransactionAlreadyProcessedException`; o `TransactionController` a captura e responde `201 OK`, pois a transação original já debitou o saldo |
+
+Por isso o `saveAndFlush` (e não `save`) nos dois serviços: o flush força o `INSERT` ainda dentro do bloco `try`, onde a violação pode ser capturada e traduzida, em vez de estourar no commit da transação e virar `500`.
 
 A chave é gerada **pelo cliente**, uma por intenção de venda, e reenviada em toda tentativa até haver resposta definitiva. Sem o header, `idempotencyKey` é `null`: a transação é debitada, a coluna fica nula (a unique constraint ignora nulos) e um `WARN` registra que aquele débito não tem proteção contra reenvio. A aplicação **não** gera a chave — uma chave gerada no servidor seria diferente em cada tentativa e daria uma falsa sensação de idempotência.
 
@@ -146,3 +168,12 @@ Limitação conhecida: o reenvio não valida se o corpo é o mesmo da chamada or
 |---|---|
 | `card` | Número (único), senha, saldo e versão para lock otimista |
 | `card_transaction` | Transações autorizadas: cartão, valor, chave de idempotência (única, opcional) e data |
+
+Sobre `card_transaction.idempotency_key`: é a única coluna **`UNIQUE` sem `NOT NULL`** do schema, e
+a combinação é intencional. Ela só existe quando o cliente envia o header `Idempotency-Key`, e a
+unique constraint não compara valores nulos entre si (comportamento padrão do SQL, válido no MySQL
+e no H2), então N transações sem chave convivem na tabela sem colidir. Acrescentar `NOT NULL` ali
+faria toda transação sem header falhar no `INSERT`.
+
+`created_at` é preenchido no `@PrePersist` de `CardTransaction` quando vem nulo, e não por
+`DEFAULT` no banco, para que o valor seja o mesmo visto pela aplicação e pelos testes.
